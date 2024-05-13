@@ -1,0 +1,336 @@
+library(Seurat)
+library(harmony)
+library(dplyr)
+library(ggpubr)
+C1 = Read10X('C1/filtered_feature_bc_matrix')
+C3 = Read10X('C3/filtered_feature_bc_matrix')
+C4 = Read10X('C4/filtered_feature_bc_matrix')
+C5 = Read10X('C5/filtered_feature_bc_matrix')
+
+C1 = CreateSeuratObject(C3,project = '33Y', min.cells = 3,min.features = 200)
+C3 = CreateSeuratObject(C3,project = '33Y', min.cells = 3,min.features = 200)
+C4 = CreateSeuratObject(C4,project = '68Y', min.cells = 3,min.features = 200)
+C5 = CreateSeuratObject(C5,project = '88Y', min.cells = 3,min.features = 200)
+
+data = merge(C3,y= c(C1,C4,C5))
+data[["percent.mt"]] = PercentageFeatureSet(data, pattern = "^MT-")
+data2 = subset(data, subset = percent.mt < 10)
+
+######### Scrublet
+data2@meta.data$CB = rownames(data2@meta.data)
+for (pi in unique(data2@meta.data$orig.ident)) {
+  small.meta=data2@meta.data %>% filter(orig.ident==pi)
+  small.mat= as.data.frame(data2@assays$RNA@counts[,small.meta$CB])
+  small.mat=round(small.mat)
+  small.mat=as.data.frame(t(small.mat))
+  write.table(small.mat,file = paste(pi,".count.txt",sep = ""),quote = F,sep = "\t",row.names = T,col.names = T)
+}                 #### R
+
+
+######### Scrublet
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import scrublet as scr
+import os
+import anndata
+directory_path = 'Cornea'
+file_names = [file for file in os.listdir(directory_path) if file.endswith('.txt')] 
+
+doublet = pd.DataFrame()
+for file_name in file_names:
+    file_path = os.path.join(directory_path, file_name)
+    data = pd.read_csv(file_path, sep='\t')
+    adata = anndata.AnnData(X=data)
+    sc.external.pp.scrublet(adata, expected_doublet_rate = 0.06, threshold = 0.25)
+    a = adata.obs
+    doublet = pd.concat([doublet, a], axis=0)
+doublet.to_csv('output.csv', index= True)       #### Python
+
+
+output = read.csv('output.csv')
+rownames(output) = output$X
+
+data3 = data2[,filter(output,predicted_doublet == 'False')[,1]]
+
+
+data3 = CellCycleScoring(object = data3, 
+                        g2m.features = cc.genes$g2m.genes,
+                        s.features = cc.genes$s.genes)
+
+data3$CellCycleScore = data3$G2M.Score+data3$S.Score
+
+data3 = SCTransform(data3,vars.to.regress = c('percent.mt','CellCycleScore'))
+data3 = RunPCA(data3 , features = VariableFeatures(data3)) 
+data3 = data3 %>% RunHarmony("orig.ident", plot_convergence = TRUE,max.iter.harmony = 50)
+
+data3 = RunUMAP(data3,reduction = 'harmony',dims = 1:30)
+data3 = FindNeighbors(data3, reduction = "harmony", dims = 1:30)    
+data3 = FindClusters(data3, resolution = 0.1,algorithm=1) 
+
+
+######### Fig1B
+DimPlot(data3,label = T,group.by = 'seurat_clusters')+NoLegend()
+
+######### Fig1C
+library(scRNAtoolVis)
+jjDotPlot(data3,id = 'seurat_clusters', dot.col = c("#0E6DAE",'white','#C0293B'),xtree=F,ytree = F,
+          gene = c('KRT13','KRT12','S100A2','KRT15','MGP','DCN',
+                   'PMEL','MLANA','TAGLN','ACTA2','CCL14','ACKR1',
+                   'CCL21','TFF3','GZMA','CD3D','HLA−DRA','HLA−DQB1'))  
+
+######### Fig1D
+prop = prop.table(table(data3$celltype, data3$orig.ident), margin = 2)
+prop = reshape2::melt(prop)
+
+p1=ggplot(data = prop,aes(x=Var2,y=value,fill=Var1))+
+  geom_bar(stat = "identity",position = "fill")
+
+prop = prop.table(table(data3$celltype))
+prop = reshape2::melt(prop)
+prop$Var2 ='all'
+p2=ggplot(data = prop,aes(x=Var2,y=value,fill=Var1))+
+  geom_bar(stat = "identity",position = "fill")
+p1|p2
+
+######### Fig1E
+library(Matrix)
+library(dplyr)
+library(rjson)
+library(Seurat)
+library(ggplot2)
+library(argparser)
+library(SeuratDisk)
+
+ST.C1 <- read.table("B02801A4.tissue.gem", sep = "\t", header = T, check.names = F)
+ST.C3 <- read.table("B01615D5.tissue.gem", sep = "\t", header = T, check.names = F)
+ST.C4 <- read.table("B01615D6.tissue.gem", sep = "\t", header = T, check.names = F)
+ST.C5 <- read.table("B02801A5.tissue.gem", sep = "\t", header = T, check.names = F)
+
+
+Creat.ST.object <- function(ST.data, bin = 50){
+  ST.data.bin50 <- ST.data
+  ST.data.bin50$x <- trunc(ST.data.bin50$x/bin) * bin
+  ST.data.bin50$y <- trunc(ST.data.bin50$y/bin) * bin
+  ST.data.bin50$cellID <- paste(ST.data.bin50$x, "_", ST.data.bin50$y, sep = "")
+  ST.data.bin50 <- aggregate(ST.data.bin50$MIDCount, by = list(ST.data.bin50$cellID, ST.data.bin50$geneID), sum)
+  colnames(ST.data.bin50) <- c("cellID", "geneID", "MIDCounts")
+  ST.data.bin50$cellInx <- match(ST.data.bin50$cellID, unique(ST.data.bin50$cellID))
+  ST.data.bin50$cellInx <- match(ST.data.bin50$cellID, unique(ST.data.bin50$cellID))
+  ST.data.bin50$geneInx <- match(ST.data.bin50$geneID, unique(ST.data.bin50$geneID))
+  mat <- sparseMatrix(i = ST.data.bin50$geneInx, j = ST.data.bin50$cellInx, x = ST.data.bin50$MIDCounts, 
+                      dimnames = list(unique(ST.data.bin50$geneID), unique(ST.data.bin50$cellID)))
+  ST.bin50.coord.df <- data.frame(cellname = colnames(mat))
+  rownames(ST.bin50.coord.df) <- ST.bin50.coord.df$cellname
+  ST.bin50.coord.df <- separate(ST.bin50.coord.df, col = cellname, sep = "_", into = c("x", "y"))
+  ST.bin50 <- CreateSeuratObject(mat, project = "ST.bin50", assay = "Spatial")
+  ST.bin50$slice <- 1
+  ST.bin50$region <- "ST.bin50"
+  colnames(ST.bin50.coord.df) <- c("imagerow", "imagecol")
+  ST.bin50.coord.df$imagerow <- as.numeric(ST.bin50.coord.df$imagerow)
+  ST.bin50.coord.df$imagecol <- as.numeric(ST.bin50.coord.df$imagecol)
+  ST.bin50@images$ST_bin50 <- new(Class = "SlideSeq", assay = "spatial", key = "image_", coordinates = ST.bin50.coord.df)
+  #SCT transform
+  ST.bin50 <- SCTransform(ST.bin50, assay = "Spatial", verbose = FALSE)
+  return(ST.bin50)
+}
+ST.C1 <- Creat.ST.object(ST.C1, 50)
+ST.C3 <- Creat.ST.object(ST.C3, 50)
+ST.C4 <- Creat.ST.object(ST.C4, 50)
+ST.C5 <- Creat.ST.object(ST.C5, 50)
+
+ST.C1 = RunPCA(ST.C1,features = VariableFeatures(ST.C1))
+ST.C3 = RunPCA(ST.C3,features = VariableFeatures(ST.C3))
+ST.C4 = RunPCA(ST.C4,features = VariableFeatures(ST.C4))
+ST.C5 = RunPCA(ST.C5,features = VariableFeatures(ST.C5))
+
+
+ST.C1@meta.data$orig.ident = 'C1_50'
+ST.C3@meta.data$orig.ident = 'C3_33'
+ST.C4@meta.data$orig.ident = 'C4_68'
+ST.C5@meta.data$orig.ident = 'C5_88'
+
+rownames(ST.C1@meta.data) = paste0('C1_',rownames(ST.C1@meta.data))
+colnames(ST.C1@assays$Spatial@counts) = paste0('C1_',colnames(ST.C1@assays$Spatial@counts))
+colnames(ST.C1@assays$Spatial@data) = paste0('C1_',colnames(ST.C1@assays$Spatial@data))
+rownames(ST.C1@images$ST_bin50@coordinates) = paste0('C1_',rownames(ST.C1@images$ST_bin50@coordinates))
+
+rownames(ST.C3@meta.data) = paste0('C3_',rownames(ST.C3@meta.data))
+colnames(ST.C3@assays$Spatial@counts) = paste0('C3_',colnames(ST.C3@assays$Spatial@counts))
+colnames(ST.C3@assays$Spatial@data) = paste0('C3_',colnames(ST.C3@assays$Spatial@data))
+rownames(ST.C3@images$ST_bin50@coordinates) = paste0('C3_',rownames(ST.C3@images$ST_bin50@coordinates))
+
+rownames(ST.C4@meta.data) = paste0('C4_',rownames(ST.C4@meta.data))
+colnames(ST.C4@assays$Spatial@counts) = paste0('C4_',colnames(ST.C4@assays$Spatial@counts))
+colnames(ST.C4@assays$Spatial@data) = paste0('C4_',colnames(ST.C4@assays$Spatial@data))
+rownames(ST.C4@images$ST_bin50@coordinates) = paste0('C4_',rownames(ST.C4@images$ST_bin50@coordinates))
+
+rownames(ST.C5@meta.data) = paste0('C5_',rownames(ST.C5@meta.data))
+colnames(ST.C5@assays$Spatial@counts) = paste0('C5_',colnames(ST.C5@assays$Spatial@counts))
+colnames(ST.C5@assays$Spatial@data) = paste0('C5_',colnames(ST.C5@assays$Spatial@data))
+rownames(ST.C5@images$ST_bin50@coordinates) = paste0('C5_',rownames(ST.C5@images$ST_bin50@coordinates))
+
+DefaultAssay(ST.C1) = 'Spatial'
+DefaultAssay(ST.C3) = 'Spatial'
+DefaultAssay(ST.C4) = 'Spatial'
+DefaultAssay(ST.C5) = 'Spatial'
+
+colnames(ST.C1@assays$SCT@counts) =  paste0('C1_',colnames(ST.C1@assays$SCT@counts) )
+colnames(ST.C3@assays$SCT@counts) =  paste0('C3_',colnames(ST.C3@assays$SCT@counts) )
+colnames(ST.C4@assays$SCT@counts) =  paste0('C4_',colnames(ST.C4@assays$SCT@counts) )
+colnames(ST.C5@assays$SCT@counts) =  paste0('C5_',colnames(ST.C5@assays$SCT@counts) )
+
+colnames(ST.C1@assays$SCT@data) =  paste0('C1_',colnames(ST.C1@assays$SCT@data) )
+colnames(ST.C3@assays$SCT@data) =  paste0('C3_',colnames(ST.C3@assays$SCT@data) )
+colnames(ST.C4@assays$SCT@data) =  paste0('C4_',colnames(ST.C4@assays$SCT@data) )
+colnames(ST.C5@assays$SCT@data) =  paste0('C5_',colnames(ST.C5@assays$SCT@data) )
+
+colnames(ST.C1@assays$SCT@scale.data) =  paste0('C1_',colnames(ST.C1@assays$SCT@scale.data) )
+colnames(ST.C3@assays$SCT@scale.data) =  paste0('C3_',colnames(ST.C3@assays$SCT@scale.data) )
+colnames(ST.C4@assays$SCT@scale.data) =  paste0('C4_',colnames(ST.C4@assays$SCT@scale.data) )
+colnames(ST.C5@assays$SCT@scale.data) =  paste0('C5_',colnames(ST.C5@assays$SCT@scale.data) )
+
+colnames(ST.C1@assays$predictions@data) =  paste0('C1_',colnames(ST.C1@assays$predictions@data) )
+colnames(ST.C3@assays$predictions@data) =  paste0('C3_',colnames(ST.C3@assays$predictions@data) )
+colnames(ST.C4@assays$predictions@data) =  paste0('C4_',colnames(ST.C4@assays$predictions@data) )
+colnames(ST.C5@assays$predictions@data) =  paste0('C5_',colnames(ST.C5@assays$predictions@data) )
+
+
+st_Data = merge(ST.C1,y=c(ST.C3,ST.C4,ST.C5))
+st_Data[["percent.mt"]] = PercentageFeatureSet(st_Data, pattern = "^MT-") 
+st_Data = SCTransform(st_Data,assay = "Spatial")
+
+st_Data_list = list(C1_st,C3_st,C4_st,C5_st)
+names(st_Data_list) = c('C1_st','C3_st','C4_st','C5_st')
+for (i in names(st_Data_list)) {
+  st_Data_list[[i]] =  SCTransform(st_Data_list[[i]],assay = "Spatial")
+}
+st_Data = merge(st_Data_list$C1_st,y=c(st_Data_list$C3_st,st_Data_list$C4_st,st_Data_list$C5_st))
+DefaultAssay(st_Data) <- "SCT"
+VariableFeatures(st_Data) <- c(VariableFeatures(st_Data_list$C1_st)[1:1500],
+                               VariableFeatures(st_Data_list$C3_st)[1:1500],
+                               VariableFeatures(st_Data_list$C4_st)[1:1500],
+                               VariableFeatures(st_Data_list$C5_st)[1:1500]) %>% unique()
+st_Data <- RunPCA(st_Data, verbose = FALSE,features = VariableFeatures(st_Data))
+st_Data <- RunUMAP(st_Data, dims = 1:20)
+st_Data <- FindNeighbors(st_Data, dims = 1:20)
+st_Data <- FindClusters(st_Data, resolution = 0.2,verbose = FALSE)
+
+DimPlot(st_Data,reduction = 'umap',group.by = 'seurat_clusters')
+
+######### Fig1F
+SpatialDimPlot(st_Data, group.by = 'region',stroke = NA,label = F, pt.size.factor =  2,
+               cols = c('#EFA5E9','#619CFF','#7A7A7A','#F77474','#F96419','#EDEDED','#8EC9ED'))
+
+######### Fig1G
+library(scRNAtoolVis)
+jjDotPlot(st_Data,id = 'region', dot.col = c("#0E6DAE",'white','#C0293B'),xtree=F,ytree = F,
+          gene = c('DCN','APOD','SAA1','KERA','COL12A1','KRT12','CLU','TGFBI','ADIRF','FTH1','PRELP','MMP3',
+'PLA2G2A','IGFBP5','SOD2','MYOC','CHI3L1','PCP4','MYL9','MYH11','S100A8','S100A9','KRT13',
+'AQP5','B2M','CA3','PTGDS','MT−ND4','MT−RNR2','MT−RNR1','SPINK5','S100A7','SPRR1B','SLPI'))  
+
+######### Fig1H
+cell_types <- data3$celltype
+names(cell_types) <- data3$CB 
+cell_types <- as.factor(cell_types) 
+nUMI <- data3@meta.data$nCount_RNA
+names(nUMI) <- data3$CB 
+reference <- Reference(data3@assays$RNA@counts, cell_types, nUMI)
+
+nUMI <- colSums(ST.C3@assays$Spatial@counts) 
+coords <- ST.C3@images$ST_bin50@coordinates
+counts = ST.C3@assays$Spatial@counts
+puck <- SpatialRNA(coords, counts, nUMI)
+
+nUMI <- colSums(ST.C3@assays$Spatial@counts) 
+coords <- ST.C3@images$ST_bin50@coordinates
+counts = ST.C3@assays$Spatial@counts
+puck <- SpatialRNA(coords, counts, nUMI)
+hist(log(puck@nUMI,2))
+myRCTD <- create.RCTD(puck, reference, max_cores = 10,CELL_MIN_INSTANCE = 0)
+myRCTD <- run.RCTD(myRCTD, doublet_mode = 'doublet')
+c3_RCTD = myRCTD
+results <- c3_RCTD@results
+ST.C3@meta.data = ST.C3@meta.data[rownames(results$results_df),]
+ST.C3@meta.data$spot_class = results$results_df$spot_class
+ST.C3@meta.data$first_type = results$results_df$first_type
+ST.C3@meta.data$second_type = results$results_df$second_type
+ST.C3_2 = ST.C3[,rownames(ST.C3@meta.data)]
+
+nUMI <- colSums(ST.C1@assays$Spatial@counts) 
+coords <- ST.C1@images$ST_bin50@coordinates
+counts = ST.C1@assays$Spatial@counts
+puck <- SpatialRNA(coords, counts, nUMI)
+hist(log(puck@nUMI,2))
+myRCTD <- create.RCTD(puck, reference, max_cores = 10,CELL_MIN_INSTANCE = 0)
+myRCTD <- run.RCTD(myRCTD, doublet_mode = 'doublet')
+c1_RCTD = myRCTD
+results <- c1_RCTD@results
+ST.C1@meta.data = ST.C1@meta.data[rownames(results$results_df),]
+ST.C1@meta.data$spot_class = results$results_df$spot_class
+ST.C1@meta.data$first_type = results$results_df$first_type
+ST.C1@meta.data$second_type = results$results_df$second_type
+ST.C1_2 = ST.C1[,rownames(ST.C1@meta.data)]
+
+nUMI <- colSums(ST.C4@assays$Spatial@counts) 
+coords <- ST.C4@images$ST_bin50@coordinates
+counts = ST.C4@assays$Spatial@counts
+puck <- SpatialRNA(coords, counts, nUMI)
+hist(log(puck@nUMI,2))
+myRCTD <- create.RCTD(puck, reference, max_cores = 10,CELL_MIN_INSTANCE = 0)
+myRCTD <- run.RCTD(myRCTD, doublet_mode = 'doublet')
+c4_RCTD = myRCTD
+results <- c4_RCTD@results
+ST.C4@meta.data = ST.C4@meta.data[rownames(results$results_df),]
+ST.C4@meta.data$spot_class = results$results_df$spot_class
+ST.C4@meta.data$first_type = results$results_df$first_type
+ST.C4@meta.data$second_type = results$results_df$second_type
+ST.C4_2 = ST.C4[,rownames(ST.C4@meta.data)]
+
+nUMI <- colSums(ST.C5@assays$Spatial@counts) 
+coords <- ST.C5@images$ST_bin50@coordinates
+counts = ST.C5@assays$Spatial@counts
+puck <- SpatialRNA(coords, counts, nUMI)
+hist(log(puck@nUMI,2))
+myRCTD <- create.RCTD(puck, reference, max_cores = 10,CELL_MIN_INSTANCE = 0)
+myRCTD <- run.RCTD(myRCTD, doublet_mode = 'doublet')
+c5_RCTD = myRCTD
+results <- c5_RCTD@results
+ST.C5@meta.data = ST.C5@meta.data[rownames(results$results_df),]
+ST.C5@meta.data$spot_class = results$results_df$spot_class
+ST.C5@meta.data$first_type = results$results_df$first_type
+ST.C5@meta.data$second_type = results$results_df$second_type
+ST.C5_2 = ST.C5[,rownames(ST.C5@meta.data)]
+
+SpatialDimPlot(ST.C1_2, label = F, pt.size.factor = 1.2,group.by = 'first_type')
+SpatialDimPlot(ST.C3_2, label = F, pt.size.factor = 1.2,group.by = 'first_type')
+SpatialDimPlot(ST.C3_2, label = F, pt.size.factor = 1.2,group.by = 'first_type')
+SpatialDimPlot(ST.C4_2, label = F, pt.size.factor = 1.2,group.by = 'first_type')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
