@@ -1,0 +1,164 @@
+ ######### Fig 5A
+library(Seurat)
+library(harmony)
+library(dplyr)
+library(ggpubr)
+
+E1 = Read10X('E1/filtered_feature_bc_matrix')
+E2 = Read10X('E2/filtered_feature_bc_matrix')
+E3 = Read10X('E3/filtered_feature_bc_matrix')
+E4 = Read10X('E4/filtered_feature_bc_matrix')
+
+E1 = CreateSeuratObject(E1,min.cells = 5, min.features = 500,project = 'E1')
+E2 = CreateSeuratObject(E2,min.cells = 5, min.features = 500,project = 'E2')
+E3 = CreateSeuratObject(E3,min.cells = 5, min.features = 500,project = 'E3')
+E4 = CreateSeuratObject(E4,min.cells = 5, min.features = 500,project = 'E4')
+
+Endo = merge(E1,y=c(E2,E3,E4))
+Endo[["percent.mt"]] = PercentageFeatureSet(Endo, pattern = "^MT-")
+
+Endo2 = subset(Endo, subset = percent.mt < 20)
+Endo2 = NormalizeData(Endo2, normalization.method = "LogNormalize", scale.factor = 10000) 
+Endo2 = FindVariableFeatures(Endo2, selection.method = "vst", nfeatures = 2000) 
+Endo2 = ScaleData(Endo2, features = VariableFeatures(Endo2)) 
+Endo2 = RunPCA(Endo2, features = VariableFeatures(Endo2))     
+Endo2 = harmony::RunHarmony(Endo2,"orig.ident", max.iter.harmony = 50)
+Endo2 = RunUMAP(Endo2,reduction = 'harmony',dims = 1:16)
+
+Endo2 = FindNeighbors(Endo2, reduction = "harmony", dims = 1:16)      
+Endo2 = FindClusters(Endo2, resolution = 0.1,algorithm=1)
+
+Endo3 = Endo2[,rownames(filter(Endo2@meta.data,RNA_snn_res.0.1 %in% c(0,2,3)))]
+
+Endo3 = NormalizeData(Endo3, normalization.method = "LogNormalize", scale.factor = 10000) 
+Endo3 = FindVariableFeatures(Endo3, selection.method = "vst", nfeatures = 2000) 
+Endo3 = ScaleData(Endo3, features = VariableFeatures(Endo3)) 
+Endo3 = RunPCA(Endo3, features = VariableFeatures(Endo3))     
+
+data_list = SplitObject(Endo3, split.by = "orig.ident")
+sce.anchors <- FindIntegrationAnchors(object.list = data_list , dims = 1:16)
+data.integrated <- IntegrateData(anchorset = sce.anchors, dims = 1:16)
+
+data.integrated = ScaleData(data.integrated)
+data.integrated = RunPCA(data.integrated, features = VariableFeatures(data.integrated))     
+data.integrated = RunTSNE(data.integrated,reduction = 'pca',dims = 1:16)
+
+DefaultAssay(data.integrated) = 'integrated'
+data.integrated = FindNeighbors(data.integrated, reduction = "pca", dims = 1:16)      
+data.integrated = FindClusters(data.integrated, resolution = 0.1,algorithm=1)
+
+DefaultAssay(data.integrated) = 'RNA'
+data.integrated = NormalizeData(data.integrated)
+data.integrated$integrated_snn_res.0.1 = as.character(data.integrated$integrated_snn_res.0.1)
+data.integrated@meta.data[data.integrated$integrated_snn_res.0.1 ==3,'integrated_snn_res.0.1'] = '0'
+
+DimPlot(data.integrated,label = T,group.by = 'integrated_snn_res.0.1',reduction = 'tsne',
+        cols = c('#F97675','#A7BB29','#D8CBF6','red'))
+
+
+ ######### Fig 5B
+library(scRNAtoolVis)
+jjDotPlot(data.integrated,id = 'integrated_snn_res.0.1', dot.col = c("#0E6DAE",'white','#C0293B'),
+          xtree=F,ytree = F,midpoint = 0,
+          gene = c('SLC2A1','SLC12A2','TM4SF1','STC1','AKAP12','SMURF2','UPP1','SERPINE1',
+                   'H2AFZ','MCM7','GMNN','PCNA','IL11','C11orf96','TAC1','CXCL8'))   
+
+ ######### Fig 5D
+SpatialFeaturePlot(st_Data, features = c("percent.mt"),crop = TRUE,stroke = NA)
+
+ ######### Fig 5E
+ENDO_ST = st_Data[,rownames(filter(st_Data@meta.data,region == 'Corneal_endothelium'))]
+ggplot(ENDO_ST@meta.data, aes(x = side, y = percent.mt,fill = side)) +  
+  geom_violin(aes(fill = side),alpha=0.9,lwd=0.7,width=0.5,color="white")+
+  geom_boxplot(aes(color = side),alpha=0,outlier.color = NA, lwd=0.8,width=0.5)+
+  theme_bw()+ scale_fill_manual(values=c("#4596A0","#FF4500"))+ 
+  scale_color_manual(values=c("#4596A0","#FF4500"))+ 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),axis.line = element_line(colour = "black"))+
+  stat_compare_means()
+
+ ######### Fig 5F
+Idents(ENDO_ST ) = 'side'
+DefaultAssay(ENDO_ST ) = 'Spatial'
+ENDO_ST  = NormalizeData(ENDO_ST )
+side_marker = FindMarkers(ENDO_ST ,ident.1 = 'Peripheral',logfc.threshold = 0)
+side_marker = filter(side_marker,p_val_adj < 0.05)
+side_marker = side_marker %>% mutate(threshold = case_when(p_val   <= 0.05 & avg_log2FC  <= 0 ~ "DOWN",
+                                                           p_val   <= 0.05 & avg_log2FC  > 0 ~ "UP",
+                                                           p_val   > 0.05 ~ "NOT"))
+
+side_marker$label = rownames(side_marker)
+side_marker[side_marker$threshold == 'NOT','label'] = ''
+
+ggplot(data=side_marker,aes(x=avg_log2FC ,
+                            y=-log10(p_val),
+                            color=threshold))+
+  geom_point(alpha=0.8,size=2)+
+  labs(x="log2 fold change")+ ylab("-log10 Pvalue")+
+  theme_bw(base_size = 20)+
+  scale_color_manual(values=c('#a121f0','#bebebe','#ffad21')) +
+  geom_vline(xintercept = 0,lty="dashed")+
+  geom_hline(yintercept = 1.30103, lty="dashed") +
+  geom_text_repel(data=side_marker, aes(label=label))
+
+
+ ######### Fig 5F
+ENDO_ST$orig.ident2 = paste0(ENDO_ST$orig.ident,'_',ENDO_ST$side)
+gmt <- read.gmt("c5.go.bp.v2023.2.Hs.symbols.gmt")
+a = filter(gmt, term== 'GOBP_ATP_BIOSYNTHETIC_PROCESS')$gene
+a = a[a%in% rownames(ENDO_ST)]
+a = ENDO_ST@assays$Spatial@data[a,] %>% t() %>% data.frame()
+a = apply(a, 1, mean)
+a = data.frame(a)
+a$b = 'b'
+a = a[rownames(ENDO_ST@meta.data),]
+ENDO_ST@meta.data$ABP = a$a
+
+a = filter(gmt, term== 'GOBP_OXIDATIVE_PHOSPHORYLATION')$gene
+a = a[a%in% rownames(ENDO_ST)]
+a = ENDO_ST@assays$Spatial@data[a,] %>% t() %>% data.frame()
+a = apply(a, 1, mean)
+a = data.frame(a)
+a$b = 'b'
+a = a[rownames(ENDO_ST@meta.data),]
+ENDO_ST@meta.data$OP = a$a
+
+a =unique(filter(gmt, term %in%  c('GOBP_IRON_ION_TRANSPORT','GOBP_CALCIUM_ION_TRANSPORT',
+                                   'GOBP_COBALT_ION_TRANSPORT','GOBP_MAGNESIUM_ION_TRANSPORT',
+                                   'GOBP_ZINC_ION_TRANSPORT','GOBP_COPPER_ION_TRANSPORT',
+                                   'GOBP_MANGANESE_ION_TRANSPORT' ))$gene)
+a = a[a%in% rownames(ENDO_ST)]
+a = ENDO_ST@assays$Spatial@data[a,] %>% t() %>% data.frame()
+a = apply(a, 1, mean)
+a = data.frame(a)
+a$b = 'b'
+a = a[rownames(ENDO_ST@meta.data),]
+ENDO_ST@meta.data$IT = a$a
+
+
+a1 = group_by(ENDO_ST@meta.data[,c('orig.ident2','ABP')], orig.ident2) %>% summarize_each(funs(median)) %>% data.frame()
+a1$orig.ident2 = factor(a1$orig.ident2,levels = c("C3_33_central","C3_33_Peripheral","C1_50_central","C1_50_Peripheral",
+                                                  "C4_68_central","C4_68_Peripheral","C5_88_central","C5_88_Peripheral"))
+ggplot(a1,aes(x= orig.ident2 ,y=ABP))+geom_point(size=3,color="#FF4500")+
+  geom_line()+geom_segment(aes(x=orig.ident2,xend=orig.ident2,y=0,yend=ABP))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8, vjust = 0.9))+
+  theme(legend.position="none")
+
+a1 = group_by(ENDO_ST@meta.data[,c('orig.ident2','OP')], orig.ident2) %>% summarize_each(funs(median)) %>% data.frame()
+a1$orig.ident2 = factor(a1$orig.ident2,levels = c("C3_33_central","C3_33_Peripheral","C1_50_central","C1_50_Peripheral",
+                                                  "C4_68_central","C4_68_Peripheral","C5_88_central","C5_88_Peripheral"))
+ggplot(a1,aes(x= orig.ident2 ,y=OP))+geom_point(size=3,color="#FF4500")+
+  geom_line()+geom_segment(aes(x=orig.ident2,xend=orig.ident2,y=0,yend=OP))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8, vjust = 0.9))+
+  theme(legend.position="none")
+
+a1 = group_by(ENDO_ST@meta.data[,c('orig.ident2','IT')], orig.ident2) %>% summarize_each(funs(median)) %>% data.frame()
+a1$orig.ident2 = factor(a1$orig.ident2,levels = c("C3_33_central","C3_33_Peripheral","C1_50_central","C1_50_Peripheral",
+                                                  "C4_68_central","C4_68_Peripheral","C5_88_central","C5_88_Peripheral"))
+ggplot(a1,aes(x= orig.ident2 ,y=IT))+geom_point(size=3,color="#FF4500")+
+  geom_line()+geom_segment(aes(x=orig.ident2,xend=orig.ident2,y=0,yend=IT))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8, vjust = 0.9))+
+  theme(legend.position="none")
+
+
+
+

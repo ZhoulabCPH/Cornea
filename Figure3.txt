@@ -1,0 +1,105 @@
+######### Fig 3A
+library(Seurat)
+library(harmony)
+library(dplyr)
+library(ggpubr)
+
+cornea = data3[,rownames(filter(data3@meta.data,cluster %in% c('c4','c5','c6','c7','c8')))]
+cornea = SCTransform(cornea)
+cornea = RunPCA(cornea,features = VariableFeatures(cornea))
+cornea = RunUMAP(cornea,reduction = 'harmony',dims = 1:50)
+DimPlot(cornea,group.by = 'cluster',label =T,cols = c('#EF8316','#E55348','#5DD0D8','#C59FE2','#8879F2'))
+
+######### Fig 3B
+FeaturePlot(cornea,features = c('GJA1','KRT24','KRT3'),reduction = "umap", pt.size = 0.0001,
+            cols =  c("#EFEFEF","#F7F7A4","#FD771F"))
+
+######### Fig 3C
+VlnPlot(cornea,features = c('GJA1','KRT24','KRT3'),group.by = 'cluster')
+
+######### Fig 3D
+Idents(cornea) = 'cluster'
+cornea_marker = FindAllMarkers(cornea)
+Mono_matrix = as(as.matrix(GetAssayData(cornea,slot = "counts")), 'sparseMatrix')
+feature_ann = data.frame(gene_id=rownames(Mono_matrix),gene_short_name=rownames(Mono_matrix))
+rownames(feature_ann) = rownames(Mono_matrix)
+Mono_fd = new("AnnotatedDataFrame", data = feature_ann)
+sample_ann = cornea@meta.data
+Mono_pd = new("AnnotatedDataFrame", data =sample_ann)
+Mono.cds = newCellDataSet(Mono_matrix,phenoData =Mono_pd,featureData =Mono_fd,expressionFamily=negbinomial.size())
+Mono.cds = estimateSizeFactors(Mono.cds)                                     
+Mono.cds = estimateDispersions(Mono.cds)
+disp_table = dispersionTable(Mono.cds)                           
+Mono.cds = setOrderingFilter(Mono.cds, filter(cornea_marker, p_val_adj < 0.05 & avg_log2FC > 1)$gene)
+Mono.cds = reduceDimension( Mono.cds, max_components = 2,method = 'DDRTree')     
+Mono.cds = orderCells(Mono.cds)      
+
+
+plot_cell_trajectory(Mono.cds, color_by = "Pseudotime",cell_size = 1,show_branch_points=F)+ 
+  theme(legend.position = "right") +  scale_color_gradientn(colors = c('#5D56A3','#5894B5','#CEE6A5','#F8D284','#ED6544'))
+
+plot_cell_trajectory(Mono.cds, color_by = "cluster",cell_size = 1,show_branch_points=F)+ 
+  theme(legend.position = "right") + facet_wrap(~cluster)+
+  scale_color_manual(values=c("#8879F2","#EF8316",'#E55348'))
+
+
+######### Fig 3E
+library(scRNAtoolVis)
+jjDotPlot(cornea,id = 'cluster', dot.col = c("#0E6DAE",'white','#C0293B'),xtree=F,ytree = F,midpoint = 0,
+          gene = c('HTRA1','CAV1','ANGPTL7','NTRK2','CXCL14','S100A2',
+                   'CSTA','S100A9','SLPI','S100A8','LY6D','KRT6A',
+                   'HES1','KRT19','KRT15','GJB4','CST3','SCGB2A1'))            
+
+
+######### Fig 3G
+gmt <- read.gmt("c5.go.bp.v2023.2.Hs.symbols.gmt")
+DefaultAssay(cornea) = 'RNA'
+cornea = NormalizeData(cornea)
+
+cornea = AddModuleScore(cornea,features = list(filter(gmt, term== 'GOBP_EPITHELIAL_CELL_DIFFERENTIATION')$gene),name = 'ECD')
+
+ggplot(cornea@meta.data, aes(x = cluster, y = ECD1,fill = cluster)) +  
+  geom_violin(aes(fill = cluster),alpha=0.9,lwd=0.7,width=0.5,color="white")+
+  geom_boxplot(aes(color = cluster),alpha=0,outlier.color = NA, lwd=0.8,width=0.5)+
+  theme_bw()
+
+
+######### Fig 3H
+library(CellChat)
+library(circlize)
+identity = data.frame(group =data3$celltype2, row.names = names(data3$celltype2)) 
+unique(identity$group)
+cellchat <- createCellChat(data3, meta = identity, group.by = "group")
+cellchat <- addMeta(cellchat, meta = identity)
+cellchat <- setIdent(cellchat, ident.use = "group")
+groupSize <- as.numeric(table(cellchat@idents)) 
+CellChatDB <- CellChatDB.human 
+dplyr::glimpse(CellChatDB$interaction)  
+CellChatDB.use <- CellChatDB
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat)
+future::plan("multiprocess", workers = 4)
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.human)
+cellchat <- computeCommunProb(cellchat)
+cellchat <- filterCommunication(cellchat, min.cells = 0)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+
+a = cellchat@net$weight[c('c6','c7','c8'),c('c4','c5')]
+a = reshape2::melt(a)
+chordDiagram(a)
+
+
+
+
+
+
+
+
+
+
+
+
+

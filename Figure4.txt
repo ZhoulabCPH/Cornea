@@ -1,0 +1,146 @@
+######### Fig 4A
+library(Seurat)
+library(harmony)
+library(dplyr)
+library(ggpubr)
+
+Stromal = data3[,rownames(filter(data3@meta.data,cluster %in% c('c18')))]
+
+Stromal = SCTransform(Stromal, vars.to.regress = c("nCount_RNA", "nFeature_RNA"))
+Stromal = RunPCA(stromal, features = VariableFeatures(stromal))
+
+Stromal = RunUMAP(Stromal, reduction = "pca", dims = 1:20)
+Stromal = FindNeighbors(Stromal, reduction = "pca", dims = 1:20)
+stromal = FindClusters(stromal, resolution = 1.5, algorithm = 1)
+
+DimPlot(stromal,group.by = 'celltype')
+
+
+######### Fig 4B
+FeaturePlot(stromal,features = c('DCN','S100B'),reduction = "umap", pt.size = 0.01,
+            cols =  c("#EFEFEF","#F7F7A4","#FD771F"))
+
+
+######### Fig 4C
+library(scRNAtoolVis)
+stromal2 = stromal[,rownames(filter(stromal@meta.data,celltype != 'SWANCH'))]
+jjDotPlot(stromal2,id = 'celltype', dot.col = c("#0E6DAE",'white','#C0293B'),xtree=F,ytree = F,midpoint = 0,
+          gene = c('KRT15','S100A2','PAX6','S100A8','COL14A1','COL1A2','CFD',
+                        'APOE','SAA1','PTGDS','KERA','GRP','RBP4','NR2F1','MYOC','DDIT4'))            
+
+
+######### Fig 4D
+stromal3 = stromal2[,rownames(filter(stromal2@meta.data,celltype != 'CSSC'))]
+Idents(stromal3) = 'celltype'
+marker = FindAllMarkers(stromal3)
+marker = filter(marker, p_val_adj < 0.05)
+
+top10 = marker %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC ) 
+
+DefaultAssay(stromal3) = 'RNA'
+stromal3 = NormalizeData(stromal3)
+heatmap_data = stromal3@assays$RNA@data[top10$gene,] %>% data.frame()
+
+
+anno = data.frame(stromal3$celltype,row.names = rownames(stromal3@meta.data))
+rownames(anno) = gsub("([-])",".",rownames(anno)) 
+names(anno) = 'anno'
+anno = arrange(anno,anno)
+
+bk <- c(seq(-4,4,by=0.01))
+color = c(colorRampPalette(colors = c("#119DC2","white"))(length(bk)/2),
+          colorRampPalette(colors = c("white","#EA595F"))(length(bk)/2))
+
+pheatmap::pheatmap(heatmap_data[,rownames(anno)],scale = 'row',show_colnames  = F,
+                   annotation_col = anno,
+                   cluster_rows = F,cluster_cols = F,breaks = bk,color = color)
+
+
+######### Fig 4F
+exp = AverageExpression(stromal2,group.by = 'celltype',
+                        features = c('COL1A1','COL1A2','COL13A1','COL14A1','COL5A1','COL5A2','COL6A1','COL12A1',
+                                              'COL24A1','DCN','BGN','LUM','KERA','ELN','FBLN5','LOXL2'))
+exp = exp$RNA
+bk <- c(seq(-1.5,1.5,by=0.01))
+color = c(colorRampPalette(colors = c("#A8D31B","white"))(length(bk)/2),
+          colorRampPalette(colors = c("white","#FC7417"))(length(bk)/2))
+
+pheatmap::pheatmap(exp,scale = 'row',cluster_rows = F,cluster_cols = F,breaks = bk,color = color)
+
+
+######### Fig 4G
+st_stromal1 = st_Data[,rownames(filter(st_Data@meta.data,cluster == 'Stromal_1'))]
+exp = AverageExpression(st_stromal1,group.by = 'orig.ident',
+                        features = c('COL1A1','COL1A2','COL13A1','COL14A1','COL5A1','COL5A2','COL6A1','COL12A1',
+                                     'COL24A1','DCN','BGN','LUM','KERA','ELN','FBLN5','LOXL2'))
+exp = exp$RNA
+bk <- c(seq(-1.5,1.5,by=0.01))
+color = c(colorRampPalette(colors = c("#A8D31B","white"))(length(bk)/2),
+          colorRampPalette(colors = c("white","#FC7417"))(length(bk)/2))
+pheatmap::pheatmap(exp,scale = 'row',cluster_rows = F,cluster_cols = F,breaks = bk,color = color)
+
+
+st_stromal2 = st_Data[,rownames(filter(st_Data@meta.data,cluster == 'Stromal_2'))]
+exp = AverageExpression(st_stromal2,group.by = 'orig.ident',
+                        features = c('COL1A1','COL1A2','COL13A1','COL14A1','COL5A1','COL5A2','COL6A1','COL12A1',
+                                     'COL24A1','DCN','BGN','LUM','KERA','ELN','FBLN5','LOXL2'))
+exp = exp$RNA
+bk <- c(seq(-1.5,1.5,by=0.01))
+color = c(colorRampPalette(colors = c("#A8D31B","white"))(length(bk)/2),
+          colorRampPalette(colors = c("white","#FC7417"))(length(bk)/2))
+pheatmap::pheatmap(exp,scale = 'row',cluster_rows = F,cluster_cols = F,breaks = bk,color = color)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
